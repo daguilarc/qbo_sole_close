@@ -91,23 +91,27 @@ theorem equity_unchanged (a b : ℕ) :
 /-- R3: the credit to Owner's Draw equals the draw, so the account closes to zero. -/
 theorem draw_zeroed {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     draw + ((a + b : ℕ) : Int) = 0 := by
-  unfold plan at h; split at h <;> (try split at h) <;> (simp_all; omega)
+  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  all_goals omega
 
 /-- R4: Retained Earnings is reduced by a positive amount and never below zero. -/
 theorem re_stays_nonneg {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     0 < a ∧ re - a ≥ 0 := by
-  unfold plan at h; split at h <;> (try split at h) <;> (simp_all; omega)
+  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  all_goals omega
 
 /-- R5: when Paid-In Capital is drawn down, it never goes below zero. -/
 theorem capital_stays_nonneg {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     b > 0 → cap - b ≥ 0 := by
-  unfold plan at h; split at h <;> (try split at h) <;> (simp_all; omega)
+  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  all_goals omega
 
 /-- R6: capital is touched only after Retained Earnings is used up; otherwise the
 remainder of Retained Earnings stays where it is. -/
 theorem capital_only_after_re {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     (b > 0 → (a : Int) = re) ∧ ((a : Int) < re → b = 0) := by
-  unfold plan at h; split at h <;> (try split at h) <;> (simp_all; omega)
+  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  all_goals omega
 
 /-- R7: nothing is posted exactly when retained earnings ≤ 0 or there are no draws. -/
 theorem nothing_iff (re draw cap : Int) :
@@ -118,6 +122,7 @@ theorem nothing_iff (re draw cap : Int) :
 shortfall exceeds Paid-In Capital. A negative capital balance alone is not an error. -/
 theorem insufficient_iff (re draw cap : Int) :
     plan re draw cap = .insufficient ↔ (re > 0 ∧ -draw > re ∧ -draw - re > cap) := by
-  unfold plan; split <;> (try split) <;> (simp_all; omega)
+  unfold plan; split <;> (try split) <;> simp_all
+  all_goals omega
 
 end QboSoleClose
