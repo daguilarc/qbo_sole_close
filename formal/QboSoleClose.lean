@@ -56,8 +56,7 @@ def closingTxn (fromRE fromCap : ℕ) : Transaction Acct Unit ℕ Unit :=
   ⟨closingEntries fromRE fromCap, by
     intro c
     cases c
-    simp [closingEntries, totalDebits, totalCredits]
-    omega⟩
+    simp [closingEntries, totalDebits, totalCredits]⟩
 
 inductive Outcome where
   | nothing                     -- post no entry
