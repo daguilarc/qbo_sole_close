@@ -36,7 +36,8 @@ inductive Acct where
 
 /-- Chart-of-accounts judgment (Pacioli's `classify` seam): all three are equity.
 Owner's Draw is a contra-equity account; under Pacioli's net-pool semantics it
-is assigned to the pool it reduces. -/
+is assigned to the pool it reduces. Ruled by the owner of this repo, 2026-11-11.
+`equity_unchanged` (R2) depends on this judgment. -/
 def classify : Acct → AccountClass := fun _ => .claim .equity
 
 /-- Entries in one currency (`Unit`), cents (`ℕ`), with no timestamp (`Unit`). -/
