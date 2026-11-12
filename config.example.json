@@ -1,0 +1,6 @@
+{
+  "client_id": "PASTE-DEVELOPMENT-CLIENT-ID",
+  "client_secret": "PASTE-DEVELOPMENT-CLIENT-SECRET",
+  "environment": "sandbox",
+  "redirect_uri": "http://localhost:8080/callback"
+}

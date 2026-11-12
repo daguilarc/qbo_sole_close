@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    name: Lean proofs + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs Lean 4.32.0 (formal/lean-toolchain), fetches Pacioli and Mathlib's
+      # prebuilt files, builds the model (checking every proof), and fails if any
+      # theorem depends on `sorry` or an axiom outside Lean's standard three.
+      - name: Check the Lean proofs
+        uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: formal
+          use-mathlib-cache: true
+          build: true
+          test: false
+          lint: false
+          axiom-audit: true
+          axiom-audit-root: QboSoleClose
+
+      # Includes the check that formal/cases.jsonl matches the model and that the
+      # Python rule agrees with all 1,000 cases. REQUIRE_LEAN_MODEL turns the
+      # model check's local skip into a failure here.
+      - name: Python tests
+        env:
+          REQUIRE_LEAN_MODEL: "1"
+        run: python3 -m unittest -v

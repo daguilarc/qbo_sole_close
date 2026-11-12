@@ -1,0 +1,22 @@
+name = "qbo_sole_close_formal"
+defaultTargets = ["QboSoleClose"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+
+# Pacioli: a verified core of accounting mechanics in Lean 4.
+# https://github.com/agpalindrome/pacioli — Copyright 2026 Otto Hermann, Apache-2.0.
+# Used unmodified as a dependency, pinned to an exact commit. It brings Mathlib
+# (also Apache-2.0) at the version its own manifest pins.
+[[require]]
+name = "pacioli"
+git = "https://github.com/agpalindrome/pacioli.git"
+rev = "06b1e85bd0339fe572dda5793dd7b8be53de7d54"
+
+[[lean_lib]]
+name = "QboSoleClose"
+
+[[lean_exe]]
+name = "cases"
+root = "Cases"
