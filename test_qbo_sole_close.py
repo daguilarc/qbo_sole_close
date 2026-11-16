@@ -177,15 +177,15 @@ class SetupPageTests(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
-    def http(self, method, path, form=None, host=None, token=True):
+    def http(self, method, path, form=None, host=None, token=True, raw=None, headers=None):
         import http.client
         from urllib.parse import urlencode
         conn = http.client.HTTPConnection(*self.host.split(":"))
         body = None
         if form is not None:
             body = urlencode({**form, **({"form_token": self.server.form_token} if token else {})})
-        conn.request(method, path, body=body, headers={
-            "Host": host or self.host, "Content-Type": "application/x-www-form-urlencoded"})
+        conn.request(method, path, body=raw if raw is not None else body, headers={
+            "Host": host or self.host, "Content-Type": "application/x-www-form-urlencoded", **(headers or {})})
         resp = conn.getresponse()
         return resp.status, resp.read().decode()
 
@@ -235,7 +235,7 @@ class SetupPageTests(unittest.TestCase):
         _, body = self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3"})
         self.assertIn("Tick the box", body)
         self.assertEqual(self.config.read_bytes(), before)
-        self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3", "confirm_positive_draw": "yes"})
+        self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3", "confirm_positive_draw": "2"})
         cfg = json.loads(self.config.read_text())
         self.assertEqual((cfg["owners_draw_account_id"], cfg["owners_draw_account_name"],
                           cfg["paid_in_capital_account_id"], cfg["paid_in_capital_account_name"]),
@@ -254,6 +254,73 @@ class SetupPageTests(unittest.TestCase):
         _, body = self.http("POST", "/preview", {"owners_draw": "2", "paid_in_capital": "3"})
         for line in PLAN.splitlines():
             self.assertIn(line.replace("'", "&#x27;"), body)
+
+    def test_preview_saves_nothing(self):
+        self.connected()
+        before = self.config.read_bytes()
+        self.http("POST", "/preview", {"owners_draw": "2", "paid_in_capital": "3"})
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_ticked_box_survives_preview_then_save(self):
+        self.connected()
+        self.books = fake_books("5000", "700", "10000")
+        _, body = self.http("POST", "/preview", {"owners_draw": "2", "paid_in_capital": "3",
+                                                 "confirm_positive_draw": "2"})
+        self.assertIn('value="2" checked', body)
+
+    def test_confirmation_for_another_account_does_not_count(self):
+        self.connected()
+        self.books = fake_books("5000", "700", "10000")
+        before = self.config.read_bytes()
+        _, body = self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3",
+                                              "confirm_positive_draw": "3"})
+        self.assertIn("Tick the box", body)
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_missing_field_is_reported_not_filled_from_saved(self):
+        self.connected()
+        cfg = json.loads(self.config.read_text())
+        cfg["owners_draw_account_id"] = "2"
+        self.config.write_text(json.dumps(cfg))
+        _, body = self.http("POST", "/save", {"paid_in_capital": "3"})
+        self.assertIn(self.q.PROBLEM_MESSAGES["missing"], body)
+
+    def test_malformed_posts_are_refused(self):
+        self.connected()
+        self.assertEqual(self.http("POST", "/save", raw="form_token=%C3%A9", token=False)[0], 403)
+        self.assertEqual(self.http("POST", "/save", raw="x", headers={"Content-Length": "abc"})[0], 400)
+
+    def test_callback_without_realm_id_stays_on_page(self):
+        status, body = self.http("GET", f"/callback?state={self.server.state}&code=x")
+        self.assertEqual(status, 200)
+        self.assertIn("Authorization failed", body)
+
+    def test_damaged_tokens_offer_reconnect(self):
+        self.connected()
+        def broken():
+            raise KeyError("realm_id")
+        self.server.new_qbo = broken
+        status, body = self.http("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("Reconnect", body)
+
+    def test_idle_connection_does_not_block_the_page(self):
+        import socket
+        idle = socket.create_connection(("localhost", int(self.host.split(":")[1])))
+        self.addCleanup(idle.close)
+        import http.client
+        conn = http.client.HTTPConnection(*self.host.split(":"), timeout=3)
+        conn.request("GET", "/", headers={"Host": self.host})
+        self.assertEqual(conn.getresponse().status, 200)
+
+    def test_expected_host_comes_from_redirect_uri(self):
+        import socket
+        with socket.socket() as sock:
+            sock.bind(("localhost", 0))
+            port = sock.getsockname()[1]
+        server = self.q.SetupServer({"redirect_uri": f"http://localhost:{port}/callback"})
+        server.server_close()
+        self.assertEqual(server.expected_host, f"localhost:{port}")
 
     def test_port_in_use_exits_with_message(self):
         cfg = {"redirect_uri": f"http://{self.host}/callback"}

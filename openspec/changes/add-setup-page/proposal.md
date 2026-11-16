@@ -14,7 +14,7 @@ Store"), so the page is served locally by `qbo_sole_close.py` itself.
   dry-run preview, and Save.
 - The OAuth callback moves into the same server; `connect` and `accounts` run
   `setup`. The numbered Terminal picker is removed.
-- Selection validity becomes one pure function, `selection_problem`, modelled
+- Selection validity becomes one pure function, `accept`, modelled
   and proved in Lean (`formal/QboSoleClose.lean`), with a generated case grid
   the Python tests compare against, as `plan_closing_entry` already is.
 - The positive-balance confirmation joins the proved rule as a named judgment input.

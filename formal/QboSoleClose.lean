@@ -12,6 +12,17 @@ source is copied here. From it this model uses:
   * `AccountClass` / `accounting_equation_differential`: the accounting equation,
     used to show the close leaves total equity unchanged.
 
+Background: the bookkeeping Pacioli encodes is the construction described in
+D. Ellerman, "On Double-Entry Bookkeeping: The Mathematical Treatment",
+Accounting Education 23(5):483–501, 2014 (doi:10.1080/09639284.2014.949803;
+preprint arXiv:1407.1898). There a T-account is a pair of unsigned numbers
+[debits // credits], the pairs form a group of differences (the "Pacioli
+group"), and a transaction balances when its T-terms sum to a zero-term. Each
+Pacioli `Entry` is a T-term with one side zero, and `Transaction.balanced`
+(debits equal credits) is that zero-term condition. The paper's vector form
+corresponds to Pacioli checking balance separately for every currency. This
+model uses one currency and does not build the group itself.
+
 Inputs are Balance Sheet balances in whole cents (`Int`, credit balances positive,
 so the Owner's Draw balance is negative when the owner withdrew cash). Outputs
 are Pacioli magnitudes (`ℕ` cents).
@@ -135,8 +146,9 @@ def separateAccounts (draw cap : Option ℕ) (equity : List ℕ) (re : ℕ) : Pr
   ∃ d c, draw = some d ∧ cap = some c ∧ d ≠ c ∧ d ≠ re ∧ c ≠ re ∧ d ∈ equity ∧ c ∈ equity
 
 /-- Judgment: an Owner's Draw account with a positive (credit) balance must be
-confirmed before it is saved, since a wrong pick would have its balance
-reclassified to Paid-In Capital. Ruled by the owner of this repo, 2026-11-15. -/
+confirmed before it is saved, since a positive balance is unusual for a draw
+account and suggests the wrong account was picked. Ruled by the owner of this
+repo, 2026-11-15. -/
 def drawNeedsConfirmation (bal : Int) : Prop := bal > 0
 
 instance (bal : Int) : Decidable (drawNeedsConfirmation bal) :=

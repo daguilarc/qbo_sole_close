@@ -188,9 +188,11 @@ yet; ask for it once the sandbox test looks right.
 | `config.example.json` | template for your `config.json` |
 | `config.json` | your app keys and chosen accounts (you create it; private) |
 | `tokens.json` | the saved QuickBooks connection (created when you connect on the setup page; private) |
-| `formal/QboSoleClose.lean` | formal model of the closing rule, built on Pacioli (see below) |
+| `formal/QboSoleClose.lean` | formal model of the closing rule and the setup page's account rule, built on Pacioli (see below) |
 | `formal/Cases.lean` | prints the model's answer for 1,000 cases |
 | `formal/cases.jsonl` | those 1,000 cases |
+| `formal/SelectionCases.lean` | prints the model's answer for 2,400 setup-page choices |
+| `formal/selection_cases.jsonl` | those 2,400 choices |
 | `formal/lakefile.toml` | Lean build file; pins the Pacioli dependency |
 | `test_qbo_sole_close.py` | tests |
 | `.github/workflows/ci.yml` | checks the proofs and runs the tests on GitHub |
@@ -239,6 +241,12 @@ The QuickBooks connection itself isn't covered by these tests; the sandbox steps
 its test.
 
 ## Credits and licenses
+
+The bookkeeping Pacioli encodes is the construction in D. Ellerman, "On Double-Entry
+Bookkeeping: The Mathematical Treatment", *Accounting Education* 23(5):483–501, 2014
+([doi:10.1080/09639284.2014.949803](https://doi.org/10.1080/09639284.2014.949803);
+[arXiv:1407.1898](https://arxiv.org/abs/1407.1898)). `formal/QboSoleClose.lean`
+explains the correspondence in its header. The paper is cited, not copied.
 
 - **Pacioli**: https://github.com/agpalindrome/pacioli, Copyright 2026 Otto Hermann,
   Apache License 2.0. Used unmodified as a Lake dependency, pinned to commit

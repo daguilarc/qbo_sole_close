@@ -40,7 +40,7 @@ import urllib.request
 import webbrowser
 from dataclasses import dataclass
 from decimal import Decimal
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -253,7 +253,8 @@ def chosen_account(books, cfg, role, label):
 def accept(draw_id, capital_id, equity_ids, re_id, draw_balance, confirmed):
     """Verdict on a setup-page selection; mirrors `accept` in formal/QboSoleClose.lean.
     Judgments (ruled by the owner, 2026-11-15): the two accounts are separate equity
-    accounts other than Retained Earnings; a positive Owner's Draw balance is confirmed."""
+    accounts other than Retained Earnings; a positive Owner's Draw balance, unusual for a
+    draw account, is confirmed so a wrong pick is caught."""
     if draw_id is None or capital_id is None:
         return "missing"
     if draw_id == capital_id:
@@ -301,7 +302,7 @@ def connect_url(cfg, state):
         "redirect_uri": cfg["redirect_uri"], "state": state})
 
 
-class SetupServer(HTTPServer):
+class SetupServer(ThreadingHTTPServer):
     """Serves the setup page. `new_qbo` and `read` are swappable for tests."""
     def __init__(self, cfg, new_qbo=None, read=None):
         redirect = urllib.parse.urlparse(cfg["redirect_uri"])
@@ -310,6 +311,7 @@ class SetupServer(HTTPServer):
         self.form_token, self.state = secrets.token_urlsafe(24), secrets.token_urlsafe(16)
         self.new_qbo, self.read = new_qbo or QBO, read or read_books
         self.done = False
+        self.daemon_threads = True
         super().__init__((redirect.hostname, 80 if redirect.port is None else redirect.port), SetupHandler)
 
 
@@ -344,9 +346,12 @@ class SetupHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.host_ok():
             return
-        length = int(self.headers.get("Content-Length") or 0)
-        form = dict(urllib.parse.parse_qsl(self.rfile.read(length).decode()))
-        if not hmac.compare_digest(form.get("form_token", ""), self.server.form_token):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            form = dict(urllib.parse.parse_qsl(self.rfile.read(length).decode("utf-8")))
+        except (ValueError, UnicodeDecodeError):
+            return self.send_page("<p class=err>Bad request.</p>", 400)
+        if not hmac.compare_digest(form.get("form_token", "").encode(), self.server.form_token.encode()):
             return self.send_page("<p class=err>Forbidden.</p>", 403)
         path = urllib.parse.urlparse(self.path).path
         if path == "/done":
@@ -359,7 +364,7 @@ class SetupHandler(BaseHTTPRequestHandler):
     def callback(self, q):
         if q.get("state") != self.server.state:
             return self.send_page("<p class=err>State mismatch. Please connect again.</p>" + self.connect_html())
-        if "code" not in q:
+        if "code" not in q or "realmId" not in q:
             return self.send_page(f"<p class=err>Authorization failed: {esc(q.get('error', 'no code returned'))}</p>"
                                   + self.connect_html())
         try:
@@ -386,6 +391,8 @@ class SetupHandler(BaseHTTPRequestHandler):
             return self.render_form(qbo, books, form, save)
         except SystemExit as e:
             return f"<p class=err>{esc(e.code)}</p>" + self.connect_html(again=True)
+        except Exception as e:  # e.g. a damaged tokens.json; keep the page up and offer Reconnect
+            return f"<p class=err>{esc(type(e).__name__)}: {esc(e)}</p>" + self.connect_html(again=True)
 
     def render_form(self, qbo, books, form, save):
         choices = [a for a in books.equity if a["Id"] != books.re_acct["Id"]]
@@ -396,14 +403,19 @@ class SetupHandler(BaseHTTPRequestHandler):
                            "Earnings (Owner's Draw and Paid-In Capital). Create them in QuickBooks, then "
                            "reload this page.</p>") + self.connect_html(again=True)
         cfg = json.loads(CONFIG_PATH.read_text())
-        current = {role: (form or {}).get(role, cfg.get(f"{role}_account_id")) for role, _ in ACCOUNT_ROLES}
+        if form is None:
+            current = {role: cfg.get(f"{role}_account_id") for role, _ in ACCOUNT_ROLES}
+        else:
+            current = {role: form.get(role, "") for role, _ in ACCOUNT_ROLES}
+        # The box confirms one specific account: its value is that account's Id.
+        confirmed = form is not None and form.get("confirm_positive_draw") == current["owners_draw"]
         by_id = {a["Id"]: a for a in choices}
         msg = ""
         if form is not None:
             draw = by_id.get(current["owners_draw"])
             verdict = accept(current["owners_draw"] or None, current["paid_in_capital"] or None,
                              [a["Id"] for a in books.equity], books.re_acct["Id"],
-                             balance(books.rows, draw) if draw else 0, form.get("confirm_positive_draw") == "yes")
+                             balance(books.rows, draw) if draw else 0, confirmed)
             if verdict != "ok":
                 msg = f"<p class=err>{esc(PROBLEM_MESSAGES[verdict])}</p>"
             else:
@@ -426,7 +438,8 @@ class SetupHandler(BaseHTTPRequestHandler):
         draw = by_id.get(current["owners_draw"])
         box = ""
         if draw and balance(books.rows, draw) > 0:
-            box = (f'<p><label><input type=checkbox name=confirm_positive_draw value=yes> '
+            box = (f'<p><label><input type=checkbox name=confirm_positive_draw value="{esc(draw["Id"])}"'
+                   f'{" checked" if confirmed else ""}> '
                    f"{esc(account_label(draw))} has a credit balance of {balance(books.rows, draw)}, which is "
                    "unusual for an Owner's Draw account. Tick to confirm it is your Owner's Draw account."
                    "</label></p>")
@@ -441,8 +454,8 @@ def setup(cfg):
     try:
         server = SetupServer(cfg)
     except OSError as e:
-        port = urllib.parse.urlparse(cfg["redirect_uri"]).port
-        sys.exit(f"Port {port} is in use ({e.strerror}); close the other program or change redirect_uri.")
+        port = urllib.parse.urlparse(cfg["redirect_uri"]).port or 80
+        sys.exit(f"Port {port} is in use; close the other program or change redirect_uri.")
     url = f"http://{server.expected_host}/"
     print(f"Setup page: {url}  (press Ctrl+C or click Done to stop)")
     webbrowser.open(url)
