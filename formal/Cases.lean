@@ -15,6 +15,7 @@ def render (re draw cap : Int) : String :=
   | .nothing => head ++ "\"outcome\": \"nothing\"}"
   | .insufficient => head ++ "\"outcome\": \"insufficient\"}"
   | .post a b => head ++ s!"\"outcome\": \"post\", \"from_re\": {a}, \"from_capital\": {b}, \"credit\": {a + b}}"
+  | .reclassify a => head ++ s!"\"outcome\": \"reclassify\", \"amount\": {a}}"
 
 def main : IO Unit := do
   for re in grid do

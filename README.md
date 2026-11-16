@@ -11,11 +11,12 @@ Earnings on the first day of the new year.
 
 | Situation | Journal entry |
 | --- | --- |
-| Retained earnings is zero or negative | nothing |
+| Owner's Draw has a credit (positive) balance | **Dr** Owner's Draw, **Cr** Paid-In Capital, both for that balance, whatever retained earnings is |
+| Owner's Draw has a debit balance (the owner withdrew cash) and retained earnings is zero or negative | nothing |
 | No owner's draws (draw balance is zero) | nothing |
 | Draw ≤ retained earnings | **Dr** Retained Earnings, **Cr** Owner's Draw, both for the draw amount. Whatever retained earnings is left stays there. |
 | Draw > retained earnings | **Dr** Retained Earnings (all of it), **Dr** Paid-In Capital (the rest), **Cr** Owner's Draw (the full draw) |
-| Draw > retained earnings + Paid-In Capital | Error: *"The Owner's Draw account exceeds available capital… Please check account settings."* Nothing is posted. |
+| Draw > retained earnings + Paid-In Capital | Error: *"The Owner's Draw account exceeds available capital… Please check account settings and previous year-end closings."* Nothing is posted. |
 
 The entry is dated the **first day of the new fiscal year** and gets the journal number
 `CLOSE-<year>` (for example `CLOSE-2026`). If you run it again for the same year, it sees
@@ -96,8 +97,9 @@ Terminal prints the setup page's address, and the page opens in your browser.
    year end.
    - Retained Earnings isn't in the menus, because the script finds it automatically.
    - The two accounts must be different.
-   - If the Owner's Draw account has a positive (credit) balance, tick the box to confirm
-     it really is your Owner's Draw account.
+   - If the Owner's Draw account has a positive (credit) balance, the close will
+     reclassify that balance to Paid-In Capital. Tick the box to confirm it really is your
+     Owner's Draw account.
    - If an account you need isn't listed, create it in QuickBooks as an **Equity**
      account, then reload the page.
 3. Click **Preview** to see the balances and the entry the close would post. Nothing is
@@ -204,17 +206,18 @@ yet; ask for it once the sandbox test looks right.
 accounting mechanics in Lean 4. The closing entry is a Pacioli `Transaction`, which can't be
 constructed unless debits equal credits. Machine-checked proofs show that:
 
-1. every closing entry balances (Pacioli's built-in invariant),
-2. it only moves amounts between equity accounts, so total equity is unchanged (from
+1. every entry it posts, closing or reclassification, balances (Pacioli's built-in invariant),
+2. every entry it posts only moves amounts between equity accounts, so total equity is unchanged (from
    Pacioli's accounting-equation theorem),
 3. it zeroes Owner's Draw,
 4. it leaves Retained Earnings at zero or above,
 5. it never takes Paid-In Capital below zero,
 6. it uses capital only after Retained Earnings is used up,
-7. it posts nothing exactly when retained earnings ≤ 0 or there are no draws, and
+7. it posts nothing exactly when the draw is zero, or there are draws and retained earnings ≤ 0,
 8. it errors exactly when the draw exceeds retained earnings and the shortfall exceeds capital,
+9. it reclassifies a positive Owner's Draw to Paid-In Capital exactly when the draw is positive, which zeroes Owner's Draw and leaves total equity unchanged,
    and
-9. the setup page saves a choice exactly when the two accounts are different equity accounts,
+10. the setup page saves a choice exactly when the two accounts are different equity accounts,
    neither is Retained Earnings, and a positive Owner's Draw balance has been confirmed.
 
 The model prints its answer for 1,000 balance combinations to `formal/cases.jsonl`, and for

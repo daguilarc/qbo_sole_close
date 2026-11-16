@@ -10,7 +10,9 @@
 Rule (balances from the Balance Sheet on the last day of the fiscal year,
 net income included in Retained Earnings; Owner's Draw is negative when the
 owner withdrew cash):
-  * Retained earnings <= 0, or no draws          -> post nothing.
+  * Owner's Draw positive (a credit balance) -> Dr Owner's Draw / Cr
+    Paid-In Capital for that balance, whatever retained earnings is.
+  * Otherwise, retained earnings <= 0 or no draws -> post nothing.
   * Draw <= retained earnings -> Dr Retained Earnings / Cr Owner's Draw for the
     draw amount; the rest of Retained Earnings stays.
   * Draw > retained earnings  -> Dr Retained Earnings (all of it), Dr Paid-In
@@ -79,6 +81,10 @@ def plan_closing_entry(retained_earnings, owners_draw, paid_in_capital):
     re_ = Decimal(retained_earnings).quantize(CENT)
     draw = (-Decimal(owners_draw)).quantize(CENT)   # amount withdrawn, positive
     capital = Decimal(paid_in_capital).quantize(CENT)
+    owners = Decimal(owners_draw).quantize(CENT)
+    if owners > 0:
+        return [EntryLine("owners_draw", "Debit", owners),
+                EntryLine("paid_in_capital", "Credit", owners)]
 
     if re_ <= 0 or draw <= 0:
         return None
@@ -89,7 +95,7 @@ def plan_closing_entry(retained_earnings, owners_draw, paid_in_capital):
         raise InsufficientCapitalError(
             f"The Owner's Draw account ({draw}) exceeds available capital "
             f"(retained earnings {re_} + paid-in capital {capital}). "
-            "Please check account settings.")
+            "Please check account settings and previous year-end closings.")
 
     lines = [EntryLine("retained_earnings", "Debit", from_re)]
     if from_capital:
@@ -440,8 +446,8 @@ class SetupHandler(BaseHTTPRequestHandler):
         if draw and balance(books.rows, draw) > 0:
             box = (f'<p><label><input type=checkbox name=confirm_positive_draw value="{esc(draw["Id"])}"'
                    f'{" checked" if confirmed else ""}> '
-                   f"{esc(account_label(draw))} has a credit balance of {balance(books.rows, draw)}, which is "
-                   "unusual for an Owner's Draw account. Tick to confirm it is your Owner's Draw account."
+                   f"{esc(account_label(draw))} has a credit balance of {balance(books.rows, draw)}. The close "
+                   "will reclassify it to Paid-In Capital. Tick to confirm this is your Owner's Draw account."
                    "</label></p>")
         token = f'<input type=hidden name=form_token value="{esc(self.server.form_token)}">'
         return (head + msg + f'<form method=post action="/preview">{token}{menus}{box}'

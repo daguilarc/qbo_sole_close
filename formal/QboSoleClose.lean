@@ -70,15 +70,36 @@ def closingTxn (fromRE fromCap : ℕ) : Transaction Acct Unit ℕ Unit :=
     cases c
     simp [closingEntries, totalDebits, totalCredits]⟩
 
+/-- Judgment: a credit balance in Owner's Draw is owner contributions and is
+closed to Paid-In Capital. Ruled by the owner of this repo, 2026-11-15. -/
+def positiveDrawIsContribution (draw : Int) : Prop := draw > 0
+
+instance (draw : Int) : Decidable (positiveDrawIsContribution draw) :=
+  inferInstanceAs (Decidable (draw > 0))
+
+/-- The reclassification entry: Dr Owner's Draw `a`, Cr Paid-In Capital `a`. -/
+def reclassEntries (a : ℕ) : List E :=
+  [⟨.ownersDraw, (), a, .debit, ()⟩,
+   ⟨.paidInCapital, (), a, .credit, ()⟩]
+
+/-- The reclassification entry as a Pacioli `Transaction`. -/
+def reclassTxn (a : ℕ) : Transaction Acct Unit ℕ Unit :=
+  ⟨reclassEntries a, by
+    intro c
+    cases c
+    simp [reclassEntries, totalDebits, totalCredits]⟩
+
 inductive Outcome where
   | nothing                     -- post no entry
   | insufficient                -- error: draw exceeds available capital
   | post (fromRE fromCap : ℕ)   -- post `closingTxn fromRE fromCap`
+  | reclassify (amt : ℕ)        -- post `reclassTxn amt`
   deriving DecidableEq, Repr
 
 /-- The closing rule. -/
 def plan (re draw cap : Int) : Outcome :=
-  if re ≤ 0 ∨ -draw ≤ 0 then .nothing
+  if positiveDrawIsContribution draw then .reclassify draw.toNat
+  else if re ≤ 0 ∨ -draw ≤ 0 then .nothing
   else if -draw > re ∧ -draw - re > cap then .insufficient
   else .post (min re (-draw)).toNat (-draw - min re (-draw)).toNat
 
@@ -103,39 +124,73 @@ theorem equity_unchanged (a b : ℕ) :
 /-- R3: the credit to Owner's Draw equals the draw, so the account closes to zero. -/
 theorem draw_zeroed {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     draw + ((a + b : ℕ) : Int) = 0 := by
-  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  unfold plan positiveDrawIsContribution at h; split at h <;> (try split at h) <;> (try split at h) <;> simp_all
   all_goals omega
 
 /-- R4: Retained Earnings is reduced by a positive amount and never below zero. -/
 theorem re_stays_nonneg {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     0 < a ∧ re - a ≥ 0 := by
-  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  unfold plan positiveDrawIsContribution at h; split at h <;> (try split at h) <;> (try split at h) <;> simp_all
   all_goals omega
 
 /-- R5: when Paid-In Capital is drawn down, it never goes below zero. -/
 theorem capital_stays_nonneg {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     b > 0 → cap - b ≥ 0 := by
-  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  unfold plan positiveDrawIsContribution at h; split at h <;> (try split at h) <;> (try split at h) <;> simp_all
   all_goals omega
 
 /-- R6: capital is touched only after Retained Earnings is used up; otherwise the
 remainder of Retained Earnings stays where it is. -/
 theorem capital_only_after_re {re draw cap : Int} {a b : ℕ} (h : plan re draw cap = .post a b) :
     (b > 0 → (a : Int) = re) ∧ ((a : Int) < re → b = 0) := by
-  unfold plan at h; split at h <;> (try split at h) <;> simp_all
+  unfold plan positiveDrawIsContribution at h; split at h <;> (try split at h) <;> (try split at h) <;> simp_all
   all_goals omega
 
-/-- R7: nothing is posted exactly when retained earnings ≤ 0 or there are no draws. -/
+/-- R7′: nothing is posted exactly when the draw is not a contribution and
+retained earnings ≤ 0 or there are no draws. -/
 theorem nothing_iff (re draw cap : Int) :
-    plan re draw cap = .nothing ↔ (re ≤ 0 ∨ draw ≥ 0) := by
-  unfold plan; split <;> (try split) <;> simp_all
+    plan re draw cap = .nothing ↔
+      (¬ positiveDrawIsContribution draw ∧ (re ≤ 0 ∨ draw = 0)) := by
+  unfold plan positiveDrawIsContribution; split <;> (try split) <;> (try split) <;> simp_all <;> omega
 
 /-- R8: the error fires exactly when the draw exceeds retained earnings and the
 shortfall exceeds Paid-In Capital. A negative capital balance alone is not an error. -/
 theorem insufficient_iff (re draw cap : Int) :
     plan re draw cap = .insufficient ↔ (re > 0 ∧ -draw > re ∧ -draw - re > cap) := by
-  unfold plan; split <;> (try split) <;> simp_all
+  unfold plan positiveDrawIsContribution; split <;> (try split) <;> (try split) <;> simp_all
   all_goals omega
+
+/-- R9: a reclassification is planned exactly when the draw is a contribution,
+and its amount is the draw balance. -/
+theorem reclassify_iff (re draw cap : Int) (a : ℕ) :
+    plan re draw cap = .reclassify a ↔
+      (positiveDrawIsContribution draw ∧ (a : Int) = draw) := by
+  unfold plan positiveDrawIsContribution; split <;> (try split) <;> (try split) <;> simp_all
+  all_goals omega
+
+/-- R10: the reclassification zeroes Owner's Draw. -/
+theorem reclass_zeroes_draw {re draw cap : Int} {a : ℕ}
+    (h : plan re draw cap = .reclassify a) :
+    positiveDrawIsContribution draw ∧ draw - (a : Int) = 0 := by
+  have := (reclassify_iff re draw cap a).1 h
+  exact ⟨this.1, by omega⟩
+
+/-- R12: every reclassification entry balances (debits = credits), by
+Pacioli's `Transaction.balanced` invariant, as R1 for the closing entry. -/
+theorem reclass_balances (a : ℕ) :
+    totalDebits () (reclassTxn a).entries = totalCredits () (reclassTxn a).entries :=
+  (reclassTxn a).balanced ()
+
+/-- R11: the reclassification only moves an amount between equity accounts, so
+total equity is unchanged (as R2). -/
+theorem reclass_equity_unchanged (a : ℕ) :
+    claimIncrease classify () (reclassTxn a).entries
+      = claimDecrease classify () (reclassTxn a).entries := by
+  have h := accounting_equation_differential classify (reclassTxn a) ()
+  have no_assets : assetEntries classify (reclassTxn a).entries = [] := by
+    simp [assetEntries, reclassTxn, reclassEntries, classify, AccountClass.isAsset]
+  simp only [assetIncrease, assetDecrease, no_assets, totalBy_nil, zero_add, add_zero] at h
+  exact h.symm
 
 /-! ## Setup page: which accounts may be saved -/
 

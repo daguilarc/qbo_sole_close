@@ -46,6 +46,11 @@ class PlanClosingEntryTests(unittest.TestCase):
             ("owners_draw", "Credit", D("30000.00")),
         ])
 
+    def test_positive_draw_is_reclassified(self):
+        want = [("owners_draw", "Debit", D("700.00")), ("paid_in_capital", "Credit", D("700.00"))]
+        for args in ((D("-500.00"), D("700.00"), D("0.00")), (D("5000.00"), D("700.00"), D("10000.00"))):
+            self.assertEqual([(l.role, l.posting, l.amount) for l in plan_closing_entry(*args)], want)
+
     def test_shortfall_beyond_capital_raises_and_plans_nothing(self):
         with self.assertRaises(InsufficientCapitalError) as ctx:
             plan_closing_entry(D("20000.00"), D("-30000.00"), D("5000.00"))
@@ -97,6 +102,7 @@ class FakeQBO:
 
     def request(self, method, path, params=None, body=None):
         self.calls.append((method, path))
+        self.body = body
         return {"JournalEntry": {"Id": "99"}}
 
 
@@ -139,12 +145,24 @@ class RunCloseOutputTests(unittest.TestCase):
         self.assertEqual(self.run_close(fake_books("20000", "-30000", "5000")), (
             HEAD.format("20000", "-30000", "5000"),
             "ERROR: The Owner's Draw account (30000.00) exceeds available capital (retained earnings "
-            "20000.00 + paid-in capital 5000.00). Please check account settings.", []))
+            "20000.00 + paid-in capital 5000.00). Please check account settings and previous year-end closings.", []))
 
     def test_already_posted(self):
         self.assertEqual(self.run_close(fake_books("5000", "-7000", "10000"), [{"Id": "42"}]), (
             HEAD.format("5000", "-7000", "10000") + PLAN +
             "Journal entry CLOSE-2025 already exists (Id 42); not posting again.\n", None, []))
+
+    def test_positive_draw_posts_reclassification(self):
+        import contextlib, io
+        from qbo_sole_close import run_close
+        qbo = FakeQBO()
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_close(qbo, fake_books("-500", "700", "0"), post=True)
+        self.assertEqual(qbo.calls, [("POST", "journalentry")])
+        self.assertEqual([(l["JournalEntryLineDetail"]["PostingType"],
+                           l["JournalEntryLineDetail"]["AccountRef"]["value"], l["Amount"])
+                          for l in qbo.body["Line"]],
+                         [("Debit", "2", 700.0), ("Credit", "3", 700.0)])
 
     def test_planned_posts(self):
         self.assertEqual(self.run_close(fake_books("5000", "-7000", "10000")), (
@@ -234,6 +252,7 @@ class SetupPageTests(unittest.TestCase):
         before = self.config.read_bytes()
         _, body = self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3"})
         self.assertIn("Tick the box", body)
+        self.assertIn("will reclassify it to Paid-In Capital", body)
         self.assertEqual(self.config.read_bytes(), before)
         self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3", "confirm_positive_draw": "2"})
         cfg = json.loads(self.config.read_text())
@@ -360,6 +379,11 @@ class MatchesLeanModelTests(unittest.TestCase):
                         plan_closing_entry(cents("re"), cents("draw"), cents("capital"))
                     continue
                 lines = plan_closing_entry(cents("re"), cents("draw"), cents("capital"))
+                if c["outcome"] == "reclassify":
+                    self.assertEqual({(l.role, l.posting): l.amount for l in lines},
+                                     {("owners_draw", "Debit"): cents("amount"),
+                                      ("paid_in_capital", "Credit"): cents("amount")})
+                    continue
                 if c["outcome"] == "nothing":
                     self.assertIsNone(lines)
                     continue
