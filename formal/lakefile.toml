@@ -20,3 +20,7 @@ name = "QboSoleClose"
 [[lean_exe]]
 name = "cases"
 root = "Cases"
+
+[[lean_exe]]
+name = "selection-cases"
+root = "SelectionCases"

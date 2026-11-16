@@ -298,6 +298,33 @@ def chosen_account(books, cfg, role, label):
     return match[0]
 
 
+def accept(draw_id, capital_id, equity_ids, re_id, draw_balance, confirmed):
+    """Verdict on a setup-page selection; mirrors `accept` in formal/QboSoleClose.lean.
+    Judgments (ruled by the owner, 2026-11-15): the two accounts are separate equity
+    accounts other than Retained Earnings; a positive Owner's Draw balance is confirmed."""
+    if draw_id is None or capital_id is None:
+        return "missing"
+    if draw_id == capital_id:
+        return "same"
+    if re_id in (draw_id, capital_id):
+        return "retained_earnings"
+    if draw_id not in equity_ids or capital_id not in equity_ids:
+        return "not_equity"
+    if draw_balance > 0 and not confirmed:
+        return "unconfirmed_positive_draw"
+    return "ok"
+
+
+PROBLEM_MESSAGES = {
+    "missing": "Choose both accounts.",
+    "same": "Owner's Draw and Paid-In Capital must be two different accounts.",
+    "retained_earnings": "Retained Earnings can't be used for either account.",
+    "not_equity": "Both accounts must be active equity accounts.",
+    "unconfirmed_positive_draw": "This Owner's Draw account has a credit balance. Tick the box to "
+                                 "confirm it really is your Owner's Draw account.",
+}
+
+
 # ---------------------------------------------------------------- commands
 
 def pick_accounts(qbo, books, ask=input):

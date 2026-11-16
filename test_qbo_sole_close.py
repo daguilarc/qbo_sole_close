@@ -14,7 +14,7 @@ import unittest
 from decimal import Decimal as D
 from pathlib import Path
 
-from qbo_sole_close import InsufficientCapitalError, plan_closing_entry, report_rows
+from qbo_sole_close import InsufficientCapitalError, accept, plan_closing_entry, report_rows
 
 
 def as_tuples(lines):
@@ -154,6 +154,7 @@ class RunCloseOutputTests(unittest.TestCase):
 
 FORMAL = Path(__file__).resolve().parent / "formal"
 CASES = FORMAL / "cases.jsonl"
+SELECTION_CASES = FORMAL / "selection_cases.jsonl"
 
 
 class MatchesLeanModelTests(unittest.TestCase):
@@ -166,9 +167,10 @@ class MatchesLeanModelTests(unittest.TestCase):
                 self.fail("Lean model not built, but REQUIRE_LEAN_MODEL is set")
             self.skipTest("Lean model not built (run `lake build` in formal/); "
                           "cannot confirm cases.jsonl matches QboSoleClose.lean")
-        fresh = subprocess.run([lake, "exe", "cases"], cwd=FORMAL,
-                               capture_output=True, text=True, check=True).stdout
-        self.assertEqual(fresh, CASES.read_text(), "Regenerate with `lake exe cases > cases.jsonl` in formal/")
+        for exe, path in (("cases", CASES), ("selection-cases", SELECTION_CASES)):
+            fresh = subprocess.run([lake, "exe", exe], cwd=FORMAL,
+                                   capture_output=True, text=True, check=True).stdout
+            self.assertEqual(fresh, path.read_text(), f"Regenerate with `lake exe {exe} > {path.name}` in formal/")
 
     def test_python_matches_model(self):
         cases = [json.loads(line) for line in CASES.read_text().splitlines()]
@@ -190,6 +192,13 @@ class MatchesLeanModelTests(unittest.TestCase):
                 if c["from_capital"]:
                     want[("paid_in_capital", "Debit")] = cents("from_capital")
                 self.assertEqual(got, want)
+
+    def test_python_accept_matches_model(self):
+        rows = [json.loads(line) for line in SELECTION_CASES.read_text().splitlines()]
+        self.assertEqual(len(rows), 2400)
+        for r in rows:
+            got = accept(r["draw"], r["capital"], r["equity"], r["re"], r["draw_balance"], r["confirmed"])
+            self.assertEqual(got, r["result"], r)
 
 
 if __name__ == "__main__":

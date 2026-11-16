@@ -126,4 +126,47 @@ theorem insufficient_iff (re draw cap : Int) :
   unfold plan; split <;> (try split) <;> simp_all
   all_goals omega
 
+/-! ## Setup page: which accounts may be saved -/
+
+/-- Judgment: Owner's Draw and Paid-In Capital are two different equity
+accounts, neither of them Retained Earnings. Ruled by the owner of this repo,
+2026-11-15. Accounts are QuickBooks account Ids; `none` means not chosen. -/
+def separateAccounts (draw cap : Option ℕ) (equity : List ℕ) (re : ℕ) : Prop :=
+  ∃ d c, draw = some d ∧ cap = some c ∧ d ≠ c ∧ d ≠ re ∧ c ≠ re ∧ d ∈ equity ∧ c ∈ equity
+
+/-- Judgment: an Owner's Draw account with a positive (credit) balance must be
+confirmed before it is saved, since a wrong pick would have its balance
+reclassified to Paid-In Capital. Ruled by the owner of this repo, 2026-11-15. -/
+def drawNeedsConfirmation (bal : Int) : Prop := bal > 0
+
+instance (bal : Int) : Decidable (drawNeedsConfirmation bal) :=
+  inferInstanceAs (Decidable (bal > 0))
+
+inductive Problem where
+  | ok | missing | same | retainedEarnings | notEquity | unconfirmedPositiveDraw
+  deriving DecidableEq, Repr
+
+/-- What the setup page says about a selection, checked in this order. -/
+def accept (draw cap : Option ℕ) (equity : List ℕ) (re : ℕ) (drawBal : Int)
+    (confirmed : Bool) : Problem :=
+  match draw, cap with
+  | some d, some c =>
+    if d = c then .same
+    else if d = re ∨ c = re then .retainedEarnings
+    else if d ∉ equity ∨ c ∉ equity then .notEquity
+    else if drawNeedsConfirmation drawBal ∧ confirmed = false then .unconfirmedPositiveDraw
+    else .ok
+  | _, _ => .missing
+
+/-- S1: a selection is saved exactly when the accounts are separate equity
+accounts and any positive draw balance has been confirmed. -/
+theorem accept_ok_iff (draw cap : Option ℕ) (equity : List ℕ) (re : ℕ) (drawBal : Int)
+    (confirmed : Bool) :
+    accept draw cap equity re drawBal confirmed = .ok ↔
+      separateAccounts draw cap equity re ∧ (¬ drawNeedsConfirmation drawBal ∨ confirmed = true) := by
+  cases draw <;> cases cap <;> simp [accept, separateAccounts]
+  rename_i d c
+  by_cases h1 : d = c <;> by_cases h2 : d = re ∨ c = re <;>
+    by_cases h3 : d ∉ equity ∨ c ∉ equity <;> cases confirmed <;> simp_all <;> tauto
+
 end QboSoleClose
