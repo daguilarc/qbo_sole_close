@@ -1,7 +1,7 @@
 """Year-end Owner's Draw close for a sole proprietor in QuickBooks Online.
 
-  python3 qbo_sole_close.py connect      connect to a company, pick the two accounts, show a dry run
-  python3 qbo_sole_close.py accounts     re-pick the Owner's Draw and Paid-In Capital accounts
+  python3 qbo_sole_close.py setup        open the setup page: connect, choose the two accounts, preview
+                                         (connect and accounts open the same page)
   python3 qbo_sole_close.py dry-run      show the balances and planned entry; post nothing
   python3 qbo_sole_close.py close        post the closing entry (the January 1 job)
   python3 qbo_sole_close.py refresh      renew the connection only (the monthly job)
@@ -27,6 +27,8 @@ chosen accounts; tokens.json holds the saved connection. Keep both private.
 import argparse
 import base64
 import datetime as dt
+import hmac
+import html
 import json
 import os
 import secrets
@@ -58,7 +60,7 @@ ACCOUNT_ROLES = (("owners_draw", "Owner's Draw"), ("paid_in_capital", "Paid-In C
 
 
 # ---------------------------------------------------------------- closing rule
-# Formal model and proofs: formal/Closing.lean. test_qbo_sole_close.py checks this
+# Formal model and proofs: formal/QboSoleClose.lean. test_qbo_sole_close.py checks this
 # function against the model's answers in formal/cases.jsonl.
 
 class InsufficientCapitalError(Exception):
@@ -129,7 +131,7 @@ def token_request(cfg, form):
             return json.load(resp)
     except urllib.error.HTTPError as e:
         sys.exit(f"Token request failed ({e.code}): {e.read().decode()}\n"
-                 "If the connection expired, run:  python3 qbo_sole_close.py connect")
+                 "If the connection expired, run:  python3 qbo_sole_close.py setup")
     except urllib.error.URLError as e:
         hint = ("\nThis Python has no root certificates. Run it with /usr/bin/python3, "
                 "or run 'Install Certificates.command' in your Python folder."
@@ -152,7 +154,7 @@ class QBO:
     def __init__(self):
         self.cfg = load_config()
         if not TOKENS_PATH.exists():
-            sys.exit("Not connected yet. Run:  python3 qbo_sole_close.py connect")
+            sys.exit("Not connected yet. Run:  python3 qbo_sole_close.py setup")
         self.tokens = json.loads(TOKENS_PATH.read_text())
         self.base = f"{API_BASE[self.cfg['environment']]}/v3/company/{self.tokens['realm_id']}"
 
@@ -183,56 +185,6 @@ class QBO:
 
     def query(self, sql):
         return self.request("GET", "query", {"query": sql}).get("QueryResponse", {})
-
-
-def connect_browser(cfg):
-    """Open Intuit's Connect page and catch the redirect on localhost; saves tokens.json."""
-    redirect = urllib.parse.urlparse(cfg["redirect_uri"])
-    state = secrets.token_urlsafe(16)
-    result = {}
-
-    class Callback(BaseHTTPRequestHandler):
-        def do_GET(self):
-            url = urllib.parse.urlparse(self.path)
-            if url.path != redirect.path:
-                self.send_response(404)
-                self.end_headers()
-                return
-            q = dict(urllib.parse.parse_qsl(url.query))
-            if q.get("state") != state:
-                msg = "State mismatch. Please run connect again."
-            elif "code" not in q:
-                msg = f"Authorization failed: {q.get('error', 'no code returned')}"
-            else:
-                try:
-                    tok = token_request(cfg, {"grant_type": "authorization_code", "code": q["code"],
-                                              "redirect_uri": cfg["redirect_uri"]})
-                    save_tokens(tok, q["realmId"])
-                    result["realm_id"] = q["realmId"]
-                    msg = "Connected! You can close this tab and return to Terminal."
-                except SystemExit as e:
-                    msg = str(e.code)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(msg.encode())
-            result["done"] = True
-            result["message"] = msg
-
-        def log_message(self, *args):
-            pass
-
-    auth_url = AUTHORIZE_URL + "?" + urllib.parse.urlencode({
-        "client_id": cfg["client_id"], "response_type": "code", "scope": SCOPE,
-        "redirect_uri": cfg["redirect_uri"], "state": state})
-    server = HTTPServer((redirect.hostname, redirect.port or 80), Callback)
-    print("Opening your browser to connect QuickBooks. If it doesn't open, visit:\n" + auth_url)
-    webbrowser.open(auth_url)
-    while not result.get("done"):
-        server.handle_request()
-    if "realm_id" not in result:
-        sys.exit("Not connected: " + result["message"])
-    print(f"Connected to company {result['realm_id']}.")
 
 
 # ---------------------------------------------------------------- reading the books
@@ -294,7 +246,7 @@ def chosen_account(books, cfg, role, label):
     match = [a for a in books.equity if a["Id"] == acct_id]
     if not match:
         sys.exit(f"The {label} account isn't set, or no longer exists as an active equity account.\n"
-                 "Run:  python3 qbo_sole_close.py accounts")
+                 "Run:  python3 qbo_sole_close.py setup")
     return match[0]
 
 
@@ -325,47 +277,184 @@ PROBLEM_MESSAGES = {
 }
 
 
+# ---------------------------------------------------------------- setup page
+
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>qbo_sole_close setup</title>
+<style>body{{font:16px system-ui;max-width:720px;margin:2em auto;padding:0 16px}}
+label{{display:block;margin:1em 0 .3em;font-weight:600}}select{{font-size:16px;width:100%}}
+pre{{background:#f4f4f4;padding:1em;overflow-x:auto}}.err{{color:#b00020}}.ok{{color:#0a6b2d}}
+button{{font-size:16px;margin:1em .5em 0 0}}</style></head><body>
+<h1>Owner's Draw close: setup</h1>{body}</body></html>"""
+
+
+def esc(text):
+    return html.escape(str(text), quote=True)
+
+
+def account_label(a):
+    return a.get("FullyQualifiedName", a["Name"])
+
+
+def connect_url(cfg, state):
+    return AUTHORIZE_URL + "?" + urllib.parse.urlencode({
+        "client_id": cfg["client_id"], "response_type": "code", "scope": SCOPE,
+        "redirect_uri": cfg["redirect_uri"], "state": state})
+
+
+class SetupServer(HTTPServer):
+    """Serves the setup page. `new_qbo` and `read` are swappable for tests."""
+    def __init__(self, cfg, new_qbo=None, read=None):
+        redirect = urllib.parse.urlparse(cfg["redirect_uri"])
+        self.cfg, self.callback_path = cfg, redirect.path
+        self.expected_host = redirect.netloc
+        self.form_token, self.state = secrets.token_urlsafe(24), secrets.token_urlsafe(16)
+        self.new_qbo, self.read = new_qbo or QBO, read or read_books
+        self.done = False
+        super().__init__((redirect.hostname, 80 if redirect.port is None else redirect.port), SetupHandler)
+
+
+class SetupHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def send_page(self, body, status=200):
+        data = PAGE.format(body=body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def host_ok(self):
+        if self.headers.get("Host") == self.server.expected_host:
+            return True
+        self.send_page("<p class=err>Forbidden.</p>", 403)
+        return False
+
+    def do_GET(self):
+        if not self.host_ok():
+            return
+        url = urllib.parse.urlparse(self.path)
+        if url.path == self.server.callback_path:
+            return self.callback(dict(urllib.parse.parse_qsl(url.query)))
+        if url.path != "/":
+            return self.send_page("<p>Not found.</p>", 404)
+        self.send_page(self.render())
+
+    def do_POST(self):
+        if not self.host_ok():
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        form = dict(urllib.parse.parse_qsl(self.rfile.read(length).decode()))
+        if not hmac.compare_digest(form.get("form_token", ""), self.server.form_token):
+            return self.send_page("<p class=err>Forbidden.</p>", 403)
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/done":
+            self.server.done = True
+            return self.send_page("<p>Setup closed. You can close this tab.</p>")
+        if path in ("/preview", "/save"):
+            return self.send_page(self.render(form, save=(path == "/save")))
+        self.send_page("<p>Not found.</p>", 404)
+
+    def callback(self, q):
+        if q.get("state") != self.server.state:
+            return self.send_page("<p class=err>State mismatch. Please connect again.</p>" + self.connect_html())
+        if "code" not in q:
+            return self.send_page(f"<p class=err>Authorization failed: {esc(q.get('error', 'no code returned'))}</p>"
+                                  + self.connect_html())
+        try:
+            tok = token_request(self.server.cfg, {"grant_type": "authorization_code", "code": q["code"],
+                                                  "redirect_uri": self.server.cfg["redirect_uri"]})
+            save_tokens(tok, q["realmId"])
+        except SystemExit as e:
+            return self.send_page(f"<p class=err>{esc(e.code)}</p>" + self.connect_html())
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.end_headers()
+
+    def connect_html(self, again=False):
+        word = "Reconnect" if again else "Connect"
+        return (f'<p><a href="{esc(connect_url(self.server.cfg, self.server.state))}">'
+                f"<button type=button>{word} to QuickBooks</button></a></p>")
+
+    def render(self, form=None, save=False):
+        if not TOKENS_PATH.exists():
+            return "<p>Not connected to QuickBooks yet.</p>" + self.connect_html()
+        try:
+            qbo = self.server.new_qbo()
+            books = self.server.read(qbo)
+            return self.render_form(qbo, books, form, save)
+        except SystemExit as e:
+            return f"<p class=err>{esc(e.code)}</p>" + self.connect_html(again=True)
+
+    def render_form(self, qbo, books, form, save):
+        choices = [a for a in books.equity if a["Id"] != books.re_acct["Id"]]
+        head = (f"<p>Company: <b>{esc(books.company.get('CompanyName'))}</b> · balances at fiscal year end "
+                f"{books.fy_end}</p>")
+        if len(choices) < 2:
+            return head + ("<p class=err>This company needs at least two equity accounts besides Retained "
+                           "Earnings (Owner's Draw and Paid-In Capital). Create them in QuickBooks, then "
+                           "reload this page.</p>") + self.connect_html(again=True)
+        cfg = json.loads(CONFIG_PATH.read_text())
+        current = {role: (form or {}).get(role, cfg.get(f"{role}_account_id")) for role, _ in ACCOUNT_ROLES}
+        by_id = {a["Id"]: a for a in choices}
+        msg = ""
+        if form is not None:
+            draw = by_id.get(current["owners_draw"])
+            verdict = accept(current["owners_draw"] or None, current["paid_in_capital"] or None,
+                             [a["Id"] for a in books.equity], books.re_acct["Id"],
+                             balance(books.rows, draw) if draw else 0, form.get("confirm_positive_draw") == "yes")
+            if verdict != "ok":
+                msg = f"<p class=err>{esc(PROBLEM_MESSAGES[verdict])}</p>"
+            else:
+                capital = by_id[current["paid_in_capital"]]
+                s = close_summary(qbo, books, draw, capital)
+                text = summary_text(s) + ([f"ERROR: {s.message}"] if s.status == "insufficient" else [])
+                msg = "<pre>" + esc("\n".join(text)) + "</pre>"
+                if save:
+                    for role, acct in (("owners_draw", draw), ("paid_in_capital", capital)):
+                        cfg[f"{role}_account_id"] = acct["Id"]
+                        cfg[f"{role}_account_name"] = account_label(acct)
+                    write_private(CONFIG_PATH, cfg)
+                    msg = "<p class=ok>Saved.</p>" + msg
+        menus = ""
+        for role, label in ACCOUNT_ROLES:
+            opts = '<option value="">Choose…</option>' + "".join(
+                f'<option value="{esc(a["Id"])}"{" selected" if a["Id"] == current[role] else ""}>'
+                f"{esc(account_label(a))} ({balance(books.rows, a)})</option>" for a in choices)
+            menus += f'<label for="{role}">{label}</label><select id="{role}" name="{role}">{opts}</select>'
+        draw = by_id.get(current["owners_draw"])
+        box = ""
+        if draw and balance(books.rows, draw) > 0:
+            box = (f'<p><label><input type=checkbox name=confirm_positive_draw value=yes> '
+                   f"{esc(account_label(draw))} has a credit balance of {balance(books.rows, draw)}, which is "
+                   "unusual for an Owner's Draw account. Tick to confirm it is your Owner's Draw account."
+                   "</label></p>")
+        token = f'<input type=hidden name=form_token value="{esc(self.server.form_token)}">'
+        return (head + msg + f'<form method=post action="/preview">{token}{menus}{box}'
+                "<button>Preview</button><button formaction=/save>Save</button></form>"
+                f'<form method=post action="/done">{token}<button>Done</button></form>'
+                + self.connect_html(again=True))
+
+
+def setup(cfg):
+    try:
+        server = SetupServer(cfg)
+    except OSError as e:
+        port = urllib.parse.urlparse(cfg["redirect_uri"]).port
+        sys.exit(f"Port {port} is in use ({e.strerror}); close the other program or change redirect_uri.")
+    url = f"http://{server.expected_host}/"
+    print(f"Setup page: {url}  (press Ctrl+C or click Done to stop)")
+    webbrowser.open(url)
+    try:
+        while not server.done:
+            server.handle_request()
+    except KeyboardInterrupt:
+        pass
+    server.server_close()
+
+
 # ---------------------------------------------------------------- commands
-
-def pick_accounts(qbo, books, ask=input):
-    """Let the user choose the Owner's Draw and Paid-In Capital accounts; saves them to config.json."""
-    choices = [a for a in books.equity if a["Id"] != books.re_acct["Id"]]
-    if len(choices) < 2:
-        sys.exit("This company needs at least two equity accounts besides Retained Earnings "
-                 "(Owner's Draw and Paid-In Capital). Create them in QuickBooks, then run:  "
-                 "python3 qbo_sole_close.py accounts")
-    print(f"\nEquity accounts in {books.company.get('CompanyName')} "
-          f"(balances at fiscal year end {books.fy_end}):")
-    for n, a in enumerate(choices, 1):
-        print(f"  {n:>2}. {a.get('FullyQualifiedName', a['Name']):<40} {balance(books.rows, a):>14}")
-
-    picked = {}
-    for role, label in ACCOUNT_ROLES:
-        while True:
-            answer = ask(f"\nNumber of your {label} account: ").strip()
-            if not answer.isdigit() or not 1 <= int(answer) <= len(choices):
-                print(f"Please enter a number from 1 to {len(choices)}.")
-                continue
-            acct = choices[int(answer) - 1]
-            if acct["Id"] in [a["Id"] for a in picked.values()]:
-                print("That account is already chosen. Please pick a different one.")
-                continue
-            if role == "owners_draw" and balance(books.rows, acct) > 0:
-                if ask(f"{acct['Name']} has a positive balance, which is unusual for an owner's draw "
-                       "account. Use it anyway? (y/n): ").strip().lower() != "y":
-                    continue
-            picked[role] = acct
-            break
-
-    cfg = json.loads(CONFIG_PATH.read_text())
-    for role, _ in ACCOUNT_ROLES:
-        cfg[f"{role}_account_id"] = picked[role]["Id"]
-        cfg[f"{role}_account_name"] = picked[role].get("FullyQualifiedName", picked[role]["Name"])
-    write_private(CONFIG_PATH, cfg)
-    qbo.cfg = cfg
-    print(f"\nSaved: Owner's Draw = {cfg['owners_draw_account_name']}, "
-          f"Paid-In Capital = {cfg['paid_in_capital_account_name']}.")
-
 
 @dataclass
 class CloseSummary:
@@ -456,11 +545,12 @@ def run_close(qbo, books, post):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["connect", "accounts", "dry-run", "close", "refresh", "dump-report"])
+    ap.add_argument("command", choices=["setup", "connect", "accounts", "dry-run", "close", "refresh", "dump-report"])
     cmd = ap.parse_args().command
 
-    if cmd == "connect":
-        connect_browser(load_config())
+    if cmd in ("setup", "connect", "accounts"):
+        setup(load_config())
+        return
     qbo = QBO()
     if cmd == "refresh":
         qbo.refresh()
@@ -474,9 +564,6 @@ def main():
         return
 
     books = read_books(qbo)
-    if cmd in ("connect", "accounts"):
-        pick_accounts(qbo, books)
-        print("\nHere is what the close would post right now (dry run):")
     run_close(qbo, books, post=(cmd == "close"))
 
 

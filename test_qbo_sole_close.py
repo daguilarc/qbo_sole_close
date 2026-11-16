@@ -152,6 +152,116 @@ class RunCloseOutputTests(unittest.TestCase):
             "Posted journal entry CLOSE-2025 (Id 99).\n", None, [("POST", "journalentry")]))
 
 
+class SetupPageTests(unittest.TestCase):
+    """Drives the setup page over a real socket, with fake QuickBooks data and temp files."""
+    def setUp(self):
+        import tempfile, threading
+        from unittest import mock
+        import qbo_sole_close as q
+        self.q = q
+        self.dir = Path(tempfile.mkdtemp())
+        self.config, self.tokens = self.dir / "config.json", self.dir / "tokens.json"
+        self.config.write_text(json.dumps({"redirect_uri": "http://localhost:0/callback",
+                                           "client_id": "id", "environment": "sandbox"}))
+        for name, value in (("CONFIG_PATH", self.config), ("TOKENS_PATH", self.tokens)):
+            patcher = mock.patch.object(q, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.books = fake_books("5000", "-7000", "10000")
+        self.read = lambda qbo: self.books
+        cfg = json.loads(self.config.read_text())
+        self.server = q.SetupServer(cfg, new_qbo=lambda: FakeQBO(), read=lambda qbo: self.read(qbo))
+        self.host = f"localhost:{self.server.server_address[1]}"
+        self.server.expected_host = self.host
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def http(self, method, path, form=None, host=None, token=True):
+        import http.client
+        from urllib.parse import urlencode
+        conn = http.client.HTTPConnection(*self.host.split(":"))
+        body = None
+        if form is not None:
+            body = urlencode({**form, **({"form_token": self.server.form_token} if token else {})})
+        conn.request(method, path, body=body, headers={
+            "Host": host or self.host, "Content-Type": "application/x-www-form-urlencoded"})
+        resp = conn.getresponse()
+        return resp.status, resp.read().decode()
+
+    def connected(self):
+        self.tokens.write_text("{}")
+
+    def test_not_connected_shows_connect_only(self):
+        status, body = self.http("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("Connect to QuickBooks", body)
+        self.assertNotIn("<select", body)
+
+    def test_connected_lists_equity_accounts_except_retained_earnings(self):
+        self.connected()
+        cfg = json.loads(self.config.read_text())
+        cfg["owners_draw_account_id"] = "2"
+        self.config.write_text(json.dumps(cfg))
+        status, body = self.http("GET", "/")
+        self.assertEqual(body.count("<select"), 2)
+        self.assertEqual(body.count('<option value="2"'), 2)
+        self.assertEqual(body.count('<option value="3"'), 2)
+        self.assertNotIn('<option value="1"', body)
+        self.assertEqual(body.count('<option value="2" selected>'), 1)
+
+    def test_read_error_is_shown_and_server_keeps_answering(self):
+        self.connected()
+        def boom(qbo):
+            raise SystemExit("boom")
+        self.read = boom
+        status, body = self.http("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("boom", body)
+        self.assertIn("Reconnect", body)
+        self.assertEqual(self.http("GET", "/")[0], 200)
+
+    def test_same_account_twice_is_refused(self):
+        self.connected()
+        before = self.config.read_bytes()
+        _, body = self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "2"})
+        self.assertIn(self.q.PROBLEM_MESSAGES["same"], body.replace("&#x27;", "'"))
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_positive_draw_needs_the_box(self):
+        self.connected()
+        self.books = fake_books("5000", "700", "10000")
+        before = self.config.read_bytes()
+        _, body = self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3"})
+        self.assertIn("Tick the box", body)
+        self.assertEqual(self.config.read_bytes(), before)
+        self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3", "confirm_positive_draw": "yes"})
+        cfg = json.loads(self.config.read_text())
+        self.assertEqual((cfg["owners_draw_account_id"], cfg["owners_draw_account_name"],
+                          cfg["paid_in_capital_account_id"], cfg["paid_in_capital_account_name"]),
+                         ("2", "Owner's Draw", "3", "Paid-In Capital"))
+
+    def test_requests_from_elsewhere_are_refused(self):
+        self.connected()
+        before = self.config.read_bytes()
+        self.assertEqual(self.http("POST", "/save", {"owners_draw": "2", "paid_in_capital": "3"},
+                                   token=False)[0], 403)
+        self.assertEqual(self.http("GET", "/", host="evil.test")[0], 403)
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_preview_shows_the_dry_run_lines(self):
+        self.connected()
+        _, body = self.http("POST", "/preview", {"owners_draw": "2", "paid_in_capital": "3"})
+        for line in PLAN.splitlines():
+            self.assertIn(line.replace("'", "&#x27;"), body)
+
+    def test_port_in_use_exits_with_message(self):
+        cfg = {"redirect_uri": f"http://{self.host}/callback"}
+        with self.assertRaises(SystemExit) as ctx:
+            self.q.setup(cfg)
+        self.assertIn(f"Port {self.host.split(':')[1]} is in use", str(ctx.exception))
+
+
 FORMAL = Path(__file__).resolve().parent / "formal"
 CASES = FORMAL / "cases.jsonl"
 SELECTION_CASES = FORMAL / "selection_cases.jsonl"
