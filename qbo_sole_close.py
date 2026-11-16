@@ -250,7 +250,9 @@ def report_rows(rows):
     for row in rows.get("Row", []):
         if "ColData" in row:
             cols = row["ColData"]
-            yield cols[0].get("value", ""), cols[0].get("id"), cols[-1].get("value", "")
+            # A row with no amount column (e.g. Net Income in a year with no activity) is zero.
+            amount = cols[-1].get("value", "") if len(cols) > 1 else ""
+            yield cols[0].get("value", ""), cols[0].get("id"), amount
         if "Rows" in row:
             yield from report_rows(row["Rows"])
 

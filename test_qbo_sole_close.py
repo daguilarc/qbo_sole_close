@@ -14,7 +14,7 @@ import unittest
 from decimal import Decimal as D
 from pathlib import Path
 
-from qbo_sole_close import InsufficientCapitalError, plan_closing_entry
+from qbo_sole_close import InsufficientCapitalError, plan_closing_entry, report_rows
 
 
 def as_tuples(lines):
@@ -76,6 +76,13 @@ class PlanClosingEntryTests(unittest.TestCase):
             debits = sum(l.amount for l in lines if l.posting == "Debit")
             credits = sum(l.amount for l in lines if l.posting == "Credit")
             self.assertEqual(debits, credits, (re_, draw, pic))
+
+
+class ReportRowsTests(unittest.TestCase):
+    def test_row_without_amount_column_reads_as_zero(self):
+        # Shape returned by the sandbox Balance Sheet when the year has no net income.
+        rows = {"Row": [{"ColData": [{"value": "Net Income"}], "type": "Data"}]}
+        self.assertEqual(list(report_rows(rows)), [("Net Income", None, "")])
 
 
 FORMAL = Path(__file__).resolve().parent / "formal"
