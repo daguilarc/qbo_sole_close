@@ -130,6 +130,11 @@ def token_request(cfg, form):
     except urllib.error.HTTPError as e:
         sys.exit(f"Token request failed ({e.code}): {e.read().decode()}\n"
                  "If the connection expired, run:  python3 qbo_sole_close.py connect")
+    except urllib.error.URLError as e:
+        hint = ("\nThis Python has no root certificates. Run it with /usr/bin/python3, "
+                "or run 'Install Certificates.command' in your Python folder."
+                if "CERTIFICATE_VERIFY_FAILED" in str(e.reason) else "")
+        sys.exit(f"Could not reach Intuit ({e.reason}).{hint}")
 
 
 def save_tokens(tok, realm_id):
@@ -199,16 +204,20 @@ def connect_browser(cfg):
             elif "code" not in q:
                 msg = f"Authorization failed: {q.get('error', 'no code returned')}"
             else:
-                tok = token_request(cfg, {"grant_type": "authorization_code", "code": q["code"],
-                                          "redirect_uri": cfg["redirect_uri"]})
-                save_tokens(tok, q["realmId"])
-                result["realm_id"] = q["realmId"]
-                msg = "Connected! You can close this tab and return to Terminal."
+                try:
+                    tok = token_request(cfg, {"grant_type": "authorization_code", "code": q["code"],
+                                              "redirect_uri": cfg["redirect_uri"]})
+                    save_tokens(tok, q["realmId"])
+                    result["realm_id"] = q["realmId"]
+                    msg = "Connected! You can close this tab and return to Terminal."
+                except SystemExit as e:
+                    msg = str(e.code)
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(msg.encode())
             result["done"] = True
+            result["message"] = msg
 
         def log_message(self, *args):
             pass
@@ -222,7 +231,7 @@ def connect_browser(cfg):
     while not result.get("done"):
         server.handle_request()
     if "realm_id" not in result:
-        sys.exit("Not connected. See the message in your browser.")
+        sys.exit("Not connected: " + result["message"])
     print(f"Connected to company {result['realm_id']}.")
 
 
