@@ -15,6 +15,8 @@ balance to Paid-In Capital, so Owner's Draw ends every close at zero.
 - Setup page: the positive-balance confirmation text says the balance will be
   reclassified to Paid-In Capital on January 1.
 - README and module docstring rule lists gain the new case.
+- The insufficient-capital error also asks the owner to check previous
+  year-end closings (owner's ruling, 2026-11-15).
 
 ## Impact
 `formal/QboSoleClose.lean`, `formal/Cases.lean`, `formal/cases.jsonl`,

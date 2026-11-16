@@ -48,4 +48,14 @@ Run Python tests with `REQUIRE_LEAN_MODEL=1 python3 -m unittest` and Lean with
      item 8 "it reclassifies a positive Owner's Draw to Paid-In Capital
      exactly when the draw is positive, which zeroes Owner's Draw and leaves
      total equity unchanged,". Renumber the list.
-6. All tests pass. Do not commit or push.
+6. Insufficient-capital error text (owner's ruling, 2026-11-15: the tool
+   automates future closings and does not correct past ones). In
+   `plan_closing_entry`, replace "Please check account settings." with
+   "Please check account settings and previous year-end closings."
+   - `RunCloseOutputTests.test_insufficient` expects exactly:
+     "ERROR: The Owner's Draw account (30000.00) exceeds available capital
+     (retained earnings 20000.00 + paid-in capital 5000.00). Please check
+     account settings and previous year-end closings." (one line, no breaks).
+   - README.md "What it posts" table, error row: the quoted text ends
+     "…Please check account settings and previous year-end closings."
+7. All tests pass. Do not commit or push.
