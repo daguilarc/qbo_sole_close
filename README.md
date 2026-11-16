@@ -24,8 +24,7 @@ that entry and stops, so it never posts twice.
 ## Commands
 
 ```
-python3 qbo_sole_close.py connect      connect to a company, pick the two accounts, show a dry run
-python3 qbo_sole_close.py accounts     re-pick the Owner's Draw and Paid-In Capital accounts
+python3 qbo_sole_close.py setup        open the setup page: connect, choose the two accounts, preview
 python3 qbo_sole_close.py dry-run      show the balances and planned entry; post nothing
 python3 qbo_sole_close.py close        post the closing entry (the January 1 job)
 python3 qbo_sole_close.py refresh      renew the connection only (the monthly job)
@@ -85,27 +84,35 @@ on your own Mac. Intuit only allows addresses you've registered.
 ### Step 3. Connect and choose your accounts (once)
 
 ```
-python3 qbo_sole_close.py connect
+python3 qbo_sole_close.py setup
 ```
 
-1. Your browser opens Intuit's sign-in page. Sign in, choose your **sandbox company**, and
-   click **Connect**. The browser shows "Connected!".
-2. Back in Terminal, you'll see a numbered list of the company's equity accounts with
-   their balances at last fiscal year end. Type the number of your **Owner's Draw**
-   account and press Return, then the number of your **Paid-In Capital** account.
-   - Retained Earnings isn't in the list, because the script finds it automatically.
-   - You can't pick the same account twice.
-   - If the draw account you pick has a positive balance, it asks you to confirm.
+Terminal prints the setup page's address, and the page opens in your browser.
+
+1. Click **Connect to QuickBooks**. Sign in, choose your **sandbox company**, and click
+   **Connect**. You come back to the setup page.
+2. Choose your **Owner's Draw** account and your **Paid-In Capital** account from the two
+   menus. Each one lists the company's equity accounts with their balances at last fiscal
+   year end.
+   - Retained Earnings isn't in the menus, because the script finds it automatically.
+   - The two accounts must be different.
+   - If the Owner's Draw account has a positive (credit) balance, tick the box to confirm
+     it really is your Owner's Draw account.
    - If an account you need isn't listed, create it in QuickBooks as an **Equity**
-     account, then run `python3 qbo_sole_close.py accounts`.
-3. Your choices are saved to `config.json` by QuickBooks account ID, so renaming an
-   account later doesn't break anything. The script then shows a **dry run**: the
-   balances it read and the entry it would post. Nothing is posted.
+     account, then reload the page.
+3. Click **Preview** to see the balances and the entry the close would post. Nothing is
+   saved or posted.
+4. Click **Save**. Your choices are saved to `config.json` by QuickBooks account ID, so
+   renaming an account later doesn't break anything.
+5. Click **Done**, or press Ctrl+C in Terminal, to stop the page.
+
+If QuickBooks reports an error, for example because the connection expired, the page shows
+it with a **Reconnect to QuickBooks** button.
 
 The connection is saved in `tokens.json`. It's private, like a password. If it's lost or
-expires, run `connect` again.
+expires, run `setup` again and click **Reconnect to QuickBooks**.
 
-To change the accounts later: `python3 qbo_sole_close.py accounts`
+To change the accounts later, run `python3 qbo_sole_close.py setup` again.
 
 ### Step 4. Set up test balances in the sandbox
 
@@ -150,7 +157,7 @@ entries, and repeat steps 5–6.
 | Once a month | `python3 qbo_sole_close.py refresh` | Intuit disconnects an app that goes unused for 100 days, so a once-a-year job alone would be disconnected by January |
 
 The scheduled run never asks questions. If the accounts were never chosen, or one was
-deleted, it stops, posts nothing, and says to run `accounts`.
+deleted, it stops, posts nothing, and says to run `setup`.
 
 The simplest place to run it is your own Mac, using macOS's built-in scheduler (launchd).
 The Mac has to be on or asleep (not shut down) at those times. Scheduling isn't set up
@@ -163,13 +170,13 @@ yet; ask for it once the sandbox test looks right.
 1. In the developer portal, complete your app's **production** settings and the **app
    assessment** questionnaire to get production keys.
 2. Production rejects `http://localhost` redirect addresses; it needs a public **HTTPS**
-   one, but only for the one-time `connect` step. Intuit's own MCP server README
+   one, but only for the one-time connect step on the setup page. Intuit's own MCP server README
    suggests a temporary tunnel such as ngrok (`https://<id>.ngrok-free.app/callback`) for
    that handshake. After it, the saved connection works locally with no public address.
 3. In `config.json`, use the production `client_id` / `client_secret` and set
    `"environment": "production"`.
-4. Run `python3 qbo_sole_close.py connect` again, choose the real company, and pick its
-   accounts. Check the dry run it shows before scheduling anything.
+4. Run `python3 qbo_sole_close.py setup` again, connect the real company, choose its
+   accounts, and check the Preview before scheduling anything.
 
 ---
 
@@ -180,7 +187,7 @@ yet; ask for it once the sandbox test looks right.
 | `qbo_sole_close.py` | the app |
 | `config.example.json` | template for your `config.json` |
 | `config.json` | your app keys and chosen accounts (you create it; private) |
-| `tokens.json` | the saved QuickBooks connection (created by `connect`; private) |
+| `tokens.json` | the saved QuickBooks connection (created when you connect on the setup page; private) |
 | `formal/QboSoleClose.lean` | formal model of the closing rule, built on Pacioli (see below) |
 | `formal/Cases.lean` | prints the model's answer for 1,000 cases |
 | `formal/cases.jsonl` | those 1,000 cases |
@@ -203,11 +210,15 @@ constructed unless debits equal credits. Machine-checked proofs show that:
 5. it never takes Paid-In Capital below zero,
 6. it uses capital only after Retained Earnings is used up,
 7. it posts nothing exactly when retained earnings ≤ 0 or there are no draws, and
-8. it errors exactly when the draw exceeds retained earnings and the shortfall exceeds capital.
+8. it errors exactly when the draw exceeds retained earnings and the shortfall exceeds capital,
+   and
+9. the setup page saves a choice exactly when the two accounts are different equity accounts,
+   neither is Retained Earnings, and a positive Owner's Draw balance has been confirmed.
 
-The model prints its answer for 1,000 balance combinations to `formal/cases.jsonl`. The tests
-require the rule in `qbo_sole_close.py` to give the same answer for every one, and check
-that the file matches the current model.
+The model prints its answer for 1,000 balance combinations to `formal/cases.jsonl`, and for
+2,400 setup-page choices to `formal/selection_cases.jsonl`. The tests require
+`qbo_sole_close.py` to give the same answer for every one, and check that both files match
+the current model.
 
 **Where the proofs are checked:** on GitHub, by the workflow in `.github/workflows/ci.yml`,
 on every push. Pacioli depends on Mathlib, which is several gigabytes, so the check runs on
@@ -221,6 +232,7 @@ cd formal
 lake exe cache get
 lake build
 lake exe cases > cases.jsonl
+lake exe selection-cases > selection_cases.jsonl
 ```
 
 The QuickBooks connection itself isn't covered by these tests; the sandbox steps above are
