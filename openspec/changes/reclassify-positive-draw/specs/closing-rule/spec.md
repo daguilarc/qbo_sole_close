@@ -12,6 +12,10 @@ case.
 - **WHEN** Owner's Draw is +700.00 and Retained Earnings is -500.00
 - **THEN** the planned entry is Debit Owner's Draw 700.00, Credit Paid-In Capital 700.00
 
+#### Scenario: Positive draw with retained earnings
+- **WHEN** Owner's Draw is +700.00, Retained Earnings is 5000.00 and Paid-In Capital is 10000.00
+- **THEN** the planned entry is Debit Owner's Draw 700.00, Credit Paid-In Capital 700.00, and Retained Earnings is untouched
+
 #### Scenario: Zero draw
 - **WHEN** Owner's Draw is 0.00
 - **THEN** nothing is posted

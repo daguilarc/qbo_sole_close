@@ -1,37 +1,50 @@
 # Design
 
 ## Rule
-Balances in Balance Sheet sign (credit positive), as now.
-1. draw > 0 → reclassify: Dr Owner's Draw `draw`, Cr Paid-In Capital `draw`.
-2. draw = 0, or re ≤ 0 → nothing.
-3. Otherwise the existing negative-draw rules (RE first, then capital, error
-   when capital is short).
+Balances in Balance Sheet sign (credit positive), as everywhere in the app.
+Owner's Draw > 0 is a credit balance (contributions recorded in the draw).
+1. Owner's Draw > 0 → reclassify: Dr Owner's Draw / Cr Paid-In Capital, both
+   for the Owner's Draw balance, whatever Retained Earnings and Paid-In
+   Capital are.
+2. Otherwise the existing rules, unchanged.
 
-Rule 1 is checked first, so RE does not matter for a positive draw.
+## Judgment (omni-rule 3.1)
+`positiveDrawIsContribution (draw : Int) : Prop := draw > 0`, docstring: a
+credit balance in Owner's Draw is owner contributions and is closed to
+Paid-In Capital; ruled by the owner of this repo, 2026-11-15. It appears by
+name in `plan` and in R7′ and R9.
 
 ## Lean
-- `Outcome.reclassify (amt : ℕ)`, entries
-  `reclassEntries amt = [Dr ownersDraw amt, Cr paidInCapital amt]`, built as
-  a Pacioli `Transaction` (balanced by construction, as `closingTxn`).
-- `plan re draw cap := if draw > 0 then .reclassify draw.toNat else <today's
-  plan>`.
-- Theorems:
-  - R7′: `plan … = .nothing ↔ draw = 0 ∨ (draw < 0 ∧ re ≤ 0)`.
-  - R8 unchanged in meaning; restated with `draw < 0` where needed.
-  - R9: `plan … = .reclassify a ↔ draw > 0 ∧ (a : Int) = draw`.
-  - R10: the reclassification zeroes Owner's Draw: `draw - a = 0`.
-  - R11: it leaves total equity unchanged (same proof shape as R2, depends on
-    `classify` by name).
-  - R3–R6 keep their statements (they are about `.post`).
-- Case grid: same 1,000 rows; rows with draw > 0 change from "nothing" to
-  `"outcome": "reclassify", "amount": n`.
+- `reclassEntries a = [⟨.ownersDraw, (), a, .debit, ()⟩,
+  ⟨.paidInCapital, (), a, .credit, ()⟩]`, and `reclassTxn a` built as a
+  Pacioli `Transaction` the same way as `closingTxn`.
+- `Outcome.reclassify (amt : ℕ)`.
+- `plan re draw cap := if positiveDrawIsContribution draw then
+  .reclassify draw.toNat else <the current body, unchanged>`.
+- R7′ `nothing_iff`: `plan re draw cap = .nothing ↔
+  (¬ positiveDrawIsContribution draw ∧ (re ≤ 0 ∨ draw = 0))`.
+- R9 `reclassify_iff`: `plan re draw cap = .reclassify a ↔
+  (positiveDrawIsContribution draw ∧ (a : Int) = draw)`.
+- R10 `reclass_zeroes_draw`: `plan re draw cap = .reclassify a →
+  draw - (a : Int) = 0`.
+- R11 `reclass_equity_unchanged`: as R2 (`equity_unchanged`) with
+  `reclassTxn a` in place of `closingTxn a b`.
+- R1–R6 and R8 keep their statements exactly; their proofs may change.
 
 ## Python
-`plan_closing_entry` returns `[("owners_draw", "Debit", d), ("paid_in_capital",
-"Credit", d)]` for d > 0. `summary_text` and posting need no change (they
-print and post whatever lines come back).
+In `plan_closing_entry`, immediately after the three `quantize` lines and
+before `if re_ <= 0 or draw <= 0`:
+`owners = Decimal(owners_draw).quantize(CENT)`; if `owners > 0`, return
+`[EntryLine("owners_draw", "Debit", owners),
+EntryLine("paid_in_capital", "Credit", owners)]`.
 
 ## Setup page
-Box text: "<account> has a credit balance of X. On January 1 the close will
-reclassify it to Paid-In Capital. Tick to confirm this is your Owner's Draw
-account." The `drawNeedsConfirmation` judgment is unchanged.
+Positive-draw box text: "<account> has a credit balance of <X>. The close
+will reclassify it to Paid-In Capital. Tick to confirm this is your Owner's
+Draw account."
+
+## Not changed
+`summary_text`'s "Nothing to close (retained earnings is zero or negative, or
+there are no owner's draws)." stays true under R7′. Journal line descriptions
+("Close Owner's Draw for fiscal year ending …") stay; the reclassification
+closes Owner's Draw too.
