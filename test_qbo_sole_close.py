@@ -85,6 +85,73 @@ class ReportRowsTests(unittest.TestCase):
         self.assertEqual(list(report_rows(rows)), [("Net Income", None, "")])
 
 
+class FakeQBO:
+    """Stands in for QBO: query returns fixed JournalEntries; request records calls."""
+    def __init__(self, existing=()):
+        self.existing = list(existing)
+        self.calls = []
+        self.cfg = {"owners_draw_account_id": "2", "paid_in_capital_account_id": "3"}
+
+    def query(self, sql):
+        return {"JournalEntry": self.existing}
+
+    def request(self, method, path, params=None, body=None):
+        self.calls.append((method, path))
+        return {"JournalEntry": {"Id": "99"}}
+
+
+def fake_books(re_, draw, pic):
+    import datetime as dt
+    from qbo_sole_close import Books
+    eq = [{"Id": "1", "Name": "Retained Earnings", "AccountSubType": "RetainedEarnings"},
+          {"Id": "2", "Name": "Owner's Draw"}, {"Id": "3", "Name": "Paid-In Capital"}]
+    rows = [("Retained Earnings", "1", re_), ("Owner's Draw", "2", draw),
+            ("Paid-In Capital", "3", pic), ("Net Income", None, "0")]
+    return Books({"CompanyName": "Test Co"}, dt.date(2025, 12, 31), dt.date(2026, 1, 1), rows, eq, eq[0])
+
+
+HEAD = "\nCompany: Test Co  |  closing fiscal year ending 2025-12-31\n  Retained Earnings (incl. 0 net income): {}\n  Owner's Draw: {}\n  Paid-In Capital: {}\n"
+PLAN = ("Planned journal entry CLOSE-2025 dated 2026-01-01:\n"
+        "  Debit   Retained Earnings                          5000.00\n"
+        "  Debit   Paid-In Capital                            2000.00\n"
+        "  Credit  Owner's Draw                               7000.00\n")
+
+
+class RunCloseOutputTests(unittest.TestCase):
+    """Output of run_close for each branch, as printed before the setup-page change."""
+    def run_close(self, books, existing=()):
+        import contextlib, io
+        from qbo_sole_close import run_close
+        qbo, out, code = FakeQBO(existing), io.StringIO(), None
+        with contextlib.redirect_stdout(out):
+            try:
+                run_close(qbo, books, post=True)
+            except SystemExit as e:
+                code = e.code
+        return out.getvalue(), code, qbo.calls
+
+    def test_nothing(self):
+        self.assertEqual(self.run_close(fake_books("0", "-30000", "50000")), (
+            HEAD.format("0", "-30000", "50000") + "Nothing to close (retained earnings is zero or "
+            "negative, or there are no owner's draws).\n", None, []))
+
+    def test_insufficient(self):
+        self.assertEqual(self.run_close(fake_books("20000", "-30000", "5000")), (
+            HEAD.format("20000", "-30000", "5000"),
+            "ERROR: The Owner's Draw account (30000.00) exceeds available capital (retained earnings "
+            "20000.00 + paid-in capital 5000.00). Please check account settings.", []))
+
+    def test_already_posted(self):
+        self.assertEqual(self.run_close(fake_books("5000", "-7000", "10000"), [{"Id": "42"}]), (
+            HEAD.format("5000", "-7000", "10000") + PLAN +
+            "Journal entry CLOSE-2025 already exists (Id 42); not posting again.\n", None, []))
+
+    def test_planned_posts(self):
+        self.assertEqual(self.run_close(fake_books("5000", "-7000", "10000")), (
+            HEAD.format("5000", "-7000", "10000") + PLAN +
+            "Posted journal entry CLOSE-2025 (Id 99).\n", None, [("POST", "journalentry")]))
+
+
 FORMAL = Path(__file__).resolve().parent / "formal"
 CASES = FORMAL / "cases.jsonl"
 

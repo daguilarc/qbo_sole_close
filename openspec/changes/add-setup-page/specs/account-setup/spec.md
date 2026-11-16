@@ -23,7 +23,8 @@ from drop-down menus. `connect` and `accounts` SHALL open the same page.
 
 ### Requirement: Proved selection rule
 A selection SHALL be accepted exactly when both accounts are chosen, they
-differ, both are equity accounts, and neither is Retained Earnings. The Lean
+differ, both are equity accounts, neither is Retained Earnings, and a
+positive Owner's Draw balance has been confirmed. The Lean
 model SHALL prove this, and the Python rule SHALL agree with the model on
 every row of `formal/selection_cases.jsonl`.
 
@@ -31,17 +32,25 @@ every row of `formal/selection_cases.jsonl`.
 - **WHEN** both menus name the same account
 - **THEN** Save is refused with a message and config.json is unchanged
 
-### Requirement: Positive draw balance is confirmed
-An Owner's Draw choice with a positive balance SHALL be saved only with the
-confirmation box ticked.
-
 #### Scenario: Unconfirmed positive draw
 - **WHEN** the chosen Owner's Draw balance is positive and the box is unticked
 - **THEN** Save is refused with a message
 
-### Requirement: Only this page can change settings
-The server SHALL refuse with 403 any POST lacking the page's per-run form
-token or carrying a different Host header.
+#### Scenario: Too few equity accounts
+- **WHEN** the company has fewer than two equity accounts besides Retained Earnings
+- **THEN** the page says so and offers no Save
+
+### Requirement: Errors stay on the page
+A QuickBooks or connection error SHALL be shown on the page with a Reconnect
+button, and the server SHALL keep answering.
+
+#### Scenario: Expired connection
+- **WHEN** reading the books fails
+- **THEN** the page shows the error and Reconnect
+
+### Requirement: Only this page can read or change settings
+The server SHALL refuse with 403 any request whose Host differs from the
+redirect URI's, and any POST lacking the page's per-run form token.
 
 #### Scenario: Forged request
 - **WHEN** a POST to /save arrives without the form token

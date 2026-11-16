@@ -340,12 +340,25 @@ def pick_accounts(qbo, books, ask=input):
           f"Paid-In Capital = {cfg['paid_in_capital_account_name']}.")
 
 
-def run_close(qbo, books, post):
-    draw_acct = chosen_account(books, qbo.cfg, "owners_draw", "Owner's Draw")
-    capital_acct = chosen_account(books, qbo.cfg, "paid_in_capital", "Paid-In Capital")
+@dataclass
+class CloseSummary:
+    company: str
+    fy_end: dt.date
+    entry_date: dt.date
+    doc_number: str
+    net_income: Decimal
+    balances: list          # (label, amount) for Retained Earnings, Owner's Draw, Paid-In Capital
+    status: str             # "nothing", "insufficient", "already_posted" or "planned"
+    message: str = ""       # error text when insufficient
+    existing_id: str = ""   # Id of the CLOSE-<year> entry when already posted
+    lines: list = None      # [(posting, account name, amount)] when planned or already posted
+    accounts: dict = None   # role -> account, for posting
+
+
+def close_summary(qbo, books, draw_acct, capital_acct):
+    """Everything the close would do, without posting. Used by Terminal and the setup page."""
     re_acct = books.re_acct
     doc_number = f"CLOSE-{books.fy_end.year}"
-
     # On the fiscal-year-end Balance Sheet the year's profit is still on its own
     # "Net Income" line; QuickBooks adds it to Retained Earnings the next day.
     net_income = sum((Decimal(a or "0") for n, i, a in books.rows if i is None and n == "Net Income"),
@@ -353,46 +366,65 @@ def run_close(qbo, books, post):
     retained = balance(books.rows, re_acct) + net_income
     draw = balance(books.rows, draw_acct)
     capital = balance(books.rows, capital_acct)
-
-    print(f"\nCompany: {books.company.get('CompanyName')}  |  closing fiscal year ending {books.fy_end}")
-    print(f"  Retained Earnings (incl. {net_income} net income): {retained}")
-    print(f"  {draw_acct['Name']}: {draw}")
-    print(f"  {capital_acct['Name']}: {capital}")
-
+    s = CloseSummary(books.company.get("CompanyName"), books.fy_end, books.entry_date, doc_number,
+                     net_income, [(f"Retained Earnings (incl. {net_income} net income)", retained),
+                                  (draw_acct["Name"], draw), (capital_acct["Name"], capital)], "nothing")
     try:
         lines = plan_closing_entry(retained, draw, capital)
     except InsufficientCapitalError as e:
-        sys.exit(f"ERROR: {e}")
+        s.status, s.message = "insufficient", str(e)
+        return s
     if lines is None:
-        print("Nothing to close (retained earnings is zero or negative, or there are no owner's draws).")
-        return
-
-    accounts = {"retained_earnings": re_acct, "paid_in_capital": capital_acct, "owners_draw": draw_acct}
-    print(f"Planned journal entry {doc_number} dated {books.entry_date}:")
-    for l in lines:
-        print(f"  {l.posting:6}  {accounts[l.role]['Name']:<35} {l.amount:>14}")
-
+        return s
+    s.accounts = {"retained_earnings": re_acct, "paid_in_capital": capital_acct, "owners_draw": draw_acct}
+    s.lines = [(l.posting, s.accounts[l.role]["Name"], l.amount, l.role) for l in lines]
     existing = qbo.query(f"select * from JournalEntry where DocNumber = '{doc_number}'").get("JournalEntry", [])
     if existing:
-        print(f"Journal entry {doc_number} already exists (Id {existing[0]['Id']}); not posting again.")
+        s.status, s.existing_id = "already_posted", existing[0]["Id"]
+    else:
+        s.status = "planned"
+    return s
+
+
+def summary_text(s):
+    """The lines Terminal prints for a summary (also shown on the setup page)."""
+    out = [f"Company: {s.company}  |  closing fiscal year ending {s.fy_end}"]
+    out += [f"  {label}: {amount}" for label, amount in s.balances]
+    if s.status == "nothing":
+        out.append("Nothing to close (retained earnings is zero or negative, or there are no owner's draws).")
+    if s.lines:
+        out.append(f"Planned journal entry {s.doc_number} dated {s.entry_date}:")
+        out += [f"  {posting:6}  {name:<35} {amount:>14}" for posting, name, amount, _ in s.lines]
+    if s.status == "already_posted":
+        out.append(f"Journal entry {s.doc_number} already exists (Id {s.existing_id}); not posting again.")
+    return out
+
+
+def run_close(qbo, books, post):
+    draw_acct = chosen_account(books, qbo.cfg, "owners_draw", "Owner's Draw")
+    capital_acct = chosen_account(books, qbo.cfg, "paid_in_capital", "Paid-In Capital")
+    s = close_summary(qbo, books, draw_acct, capital_acct)
+    print("\n" + "\n".join(summary_text(s)))
+    if s.status == "insufficient":
+        sys.exit(f"ERROR: {s.message}")
+    if s.status != "planned":
         return
     if not post:
         print("Dry run: nothing posted.")
         return
-
     created = qbo.request("POST", "journalentry", body={
-        "TxnDate": books.entry_date.isoformat(),
-        "DocNumber": doc_number,
-        "PrivateNote": f"Automated Owner's Draw close for fiscal year ending {books.fy_end}.",
+        "TxnDate": s.entry_date.isoformat(),
+        "DocNumber": s.doc_number,
+        "PrivateNote": f"Automated Owner's Draw close for fiscal year ending {s.fy_end}.",
         "Line": [{
-            "Amount": float(l.amount),
+            "Amount": float(amount),
             "DetailType": "JournalEntryLineDetail",
-            "Description": f"Close Owner's Draw for fiscal year ending {books.fy_end}",
-            "JournalEntryLineDetail": {"PostingType": l.posting,
-                                       "AccountRef": {"value": accounts[l.role]["Id"]}},
-        } for l in lines],
+            "Description": f"Close Owner's Draw for fiscal year ending {s.fy_end}",
+            "JournalEntryLineDetail": {"PostingType": posting,
+                                       "AccountRef": {"value": s.accounts[role]["Id"]}},
+        } for posting, _, amount, role in s.lines],
     })["JournalEntry"]
-    print(f"Posted journal entry {doc_number} (Id {created['Id']}).")
+    print(f"Posted journal entry {s.doc_number} (Id {created['Id']}).")
 
 
 def main():
